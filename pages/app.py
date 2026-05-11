@@ -12,14 +12,16 @@ from face_utils import process_pil_image
 from analyzer import analyze
 
 
+
 # ── Page config ─────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Skin Tone Analyzer",
+    page_title="Agarthan Skin Tone Analyzer",
     page_icon="🎨",
     layout="wide",
 )
 
-SAMPLES_DIR = Path(__file__).parent / "samples"
+
+SAMPLES_DIR = Path(__file__).parent.parent / "samples"
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".avif", ".webp"}
 
 
