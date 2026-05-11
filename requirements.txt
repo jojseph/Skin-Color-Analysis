@@ -1,0 +1,7 @@
+streamlit
+mediapipe
+opencv-python
+Pillow
+python-dotenv
+google-generativeai
+ollama
