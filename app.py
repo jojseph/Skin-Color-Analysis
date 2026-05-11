@@ -1,13 +1,14 @@
 """
 app.py
-Person 3 owns this file.
-Streamlit UI — handles upload, loading state, and all result display sections.
+Streamlit UI — handles upload, sample selection, loading state, and all result display sections.
 """
+
+from pathlib import Path
 
 import streamlit as st
 from PIL import Image
 
-from face_utils import process_uploaded_image
+from face_utils import process_pil_image
 from analyzer import analyze
 
 
@@ -17,6 +18,9 @@ st.set_page_config(
     page_icon="🎨",
     layout="wide",
 )
+
+SAMPLES_DIR = Path(__file__).parent / "samples"
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".avif", ".webp"}
 
 
 # ── Season theme config ─────────────────────────────────────────────────────────
@@ -80,23 +84,28 @@ def render_color_chips(color_items: list, style: str = "normal"):
     bg = "#FFEBEE" if style == "avoid" else "#F0F4F8"
     text = "#B71C1C" if style == "avoid" else "#1A2A3A"
     border = "#FFCDD2" if style == "avoid" else "#CBD5E0"
-    
+
     chips_html = []
     for item in color_items:
         if isinstance(item, dict):
             name = item.get("name", "Unknown")
             hex_val = item.get("hex", "")
-            dot_html = f'<span style="display:inline-block; width:12px; height:12px; background:{hex_val}; border-radius:50%; margin-right:6px; vertical-align:-1px; border:1px solid rgba(0,0,0,0.1);"></span>' if hex_val else ""
+            dot_html = (
+                f'<span style="display:inline-block; width:12px; height:12px; '
+                f'background:{hex_val}; border-radius:50%; margin-right:6px; '
+                f'vertical-align:-1px; border:1px solid rgba(0,0,0,0.1);"></span>'
+                if hex_val else ""
+            )
         else:
             name = str(item)
             dot_html = ""
-            
+
         chips_html.append(
             f'<span style="background:{bg};color:{text};border:1px solid {border};'
             f'padding:4px 12px;border-radius:20px;font-size:13px;margin:3px;'
             f'display:inline-block;">{dot_html}{name}</span>'
         )
-        
+
     st.markdown(f'<div style="margin:8px 0">{" ".join(chips_html)}</div>', unsafe_allow_html=True)
 
 
@@ -104,7 +113,7 @@ def render_color_chips(color_items: list, style: str = "normal"):
 with st.sidebar:
     st.title("ℹ️ How to use")
     st.markdown("""
-    1. Upload a **clear portrait photo** — face fully visible, good lighting.
+    1. Upload a **clear portrait photo** — or pick one from the samples.
     2. Wait a few seconds for the AI analysis.
     3. See your **seasonal colour type** and personalised recommendations.
 
@@ -114,42 +123,106 @@ with st.sidebar:
     - Avoid heavy filters or extreme lighting
     """)
     st.divider()
-    st.caption("Powered by a Vision Language Model (VLM)")
+    st.caption("Powered by Google Gemini")
+
+
+# ── Session state ────────────────────────────────────────────────────────────────
+if "sample_pil" not in st.session_state:
+    st.session_state.sample_pil = None
+if "sample_name" not in st.session_state:
+    st.session_state.sample_name = ""
 
 
 # ── Main UI ─────────────────────────────────────────────────────────────────────
-st.title("🎨 Skin Tone Seasonal Analyzer")
-st.markdown("Upload a portrait photo to discover your seasonal colour type and get personalised recommendations.")
+st.title("🎨 Agarthan Skin Tone Analyzer")
+st.markdown("Upload a portrait photo, take one with your camera, or choose a sample to discover your seasonal colour type.")
 
-uploaded_file = st.file_uploader(
-    "Choose a portrait photo",
-    type=["jpg", "jpeg", "png"],
-    help="A clear, well-lit portrait works best."
-)
+tab_upload, tab_camera, tab_sample = st.tabs(["📤 Upload a Photo", "📷 Take a Photo", "🖼️ Sample Images"])
+
+with tab_upload:
+    uploaded_file = st.file_uploader(
+        "Choose a portrait photo",
+        type=["jpg", "jpeg", "png"],
+        help="A clear, well-lit portrait works best.",
+    )
+    if uploaded_file is not None:
+        st.session_state.sample_pil = None
+
+with tab_camera:
+    camera_photo = st.camera_input("Take a portrait photo")
+    if camera_photo is not None:
+        st.session_state.sample_pil = None
+
+with tab_sample:
+    sample_files = sorted([
+        f for f in SAMPLES_DIR.iterdir()
+        if f.suffix.lower() in SUPPORTED_EXTS
+    ]) if SAMPLES_DIR.exists() else []
+
+    if not sample_files:
+        st.info("No sample images found in `samples/`.")
+    else:
+        options = {f.name: f for f in sample_files}
+        chosen_name = st.selectbox("Select a sample image", list(options.keys()))
+        chosen_path = options[chosen_name]
+
+        try:
+            preview_img = Image.open(chosen_path)
+            st.image(preview_img, caption=chosen_name, width=300)
+        except Exception as e:
+            st.warning(f"Cannot preview `{chosen_name}`: {e}")
+            preview_img = None
+
+        if st.button("Analyse this sample", type="primary"):
+            if preview_img is not None:
+                st.session_state.sample_pil = preview_img.copy()
+                st.session_state.sample_name = chosen_name
+            else:
+                st.error("Could not load this sample image.")
+
+
+# ── Resolve active image ─────────────────────────────────────────────────────────
+pil_image = None
+image_caption = ""
 
 if uploaded_file is not None:
+    try:
+        pil_image = Image.open(uploaded_file)
+        image_caption = uploaded_file.name
+    except Exception as e:
+        st.error(f"Could not open uploaded file: {e}")
+elif camera_photo is not None:
+    try:
+        pil_image = Image.open(camera_photo)
+        image_caption = "Camera photo"
+    except Exception as e:
+        st.error(f"Could not open camera photo: {e}")
+elif st.session_state.sample_pil is not None:
+    pil_image = st.session_state.sample_pil
+    image_caption = st.session_state.sample_name
 
-    # ── Run analysis ────────────────────────────────────────────────────────────
+
+# ── Analysis & results ──────────────────────────────────────────────────────────
+if pil_image is not None:
+
     with st.spinner("Detecting face and analysing your skin tone..."):
         try:
-            # Step 1: detect face + encode
-            base64_img, face_crop = process_uploaded_image(uploaded_file)
+            base64_img, face_crop = process_pil_image(pil_image)
 
             if base64_img is None:
                 st.error(
-                    "**No face detected.** Please upload a clear portrait photo "
+                    "**No face detected.** Please use a clear portrait photo "
                     "where your face is fully visible and well-lit."
                 )
                 st.stop()
 
-            # Step 2: VLM analysis
             result = analyze(base64_img)
 
         except EnvironmentError as e:
             st.error(f"**API key error:** {e}")
             st.stop()
         except ValueError as e:
-            st.error(f"**Could not parse the model response.** Try uploading a clearer photo. ({e})")
+            st.error(f"**Could not parse the model response.** Try a clearer photo. ({e})")
             st.stop()
         except Exception as e:
             st.error(f"**Something went wrong:** {e}")
@@ -157,20 +230,15 @@ if uploaded_file is not None:
 
     st.divider()
 
-    # Create two columns for layout: left for image, right for analysis
     img_col, analysis_col = st.columns([1, 1.5])
 
     with img_col:
-        st.image(uploaded_file, caption="Uploaded photo", use_container_width=True)
-        # Optional: show the face crop
-        # st.image(face_crop, caption="Detected Face", width=150)
+        st.image(pil_image, caption=image_caption, width='stretch')
 
     with analysis_col:
-        # ── Results ─────────────────────────────────────────────────────────────────
         season = result.get("season", "Unknown")
-        theme  = SEASON_THEMES.get(season, SEASON_THEMES["Spring"])
+        theme = SEASON_THEMES.get(season, SEASON_THEMES["Spring"])
 
-        # Season banner
         st.markdown(
             f"""<div style="
                 background:{theme['bg_color']};
@@ -189,7 +257,6 @@ if uploaded_file is not None:
             unsafe_allow_html=True,
         )
 
-        # Undertone tag & Summary
         undertone = result.get("undertone", "").capitalize()
         if undertone:
             st.markdown(f"**Undertone:** `{undertone}`")
@@ -200,7 +267,6 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # Colour palette
         st.subheader("🎨 Your Colour Palette")
         palette = result.get("palette", [])
         if palette:
@@ -210,7 +276,6 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # Outfit suggestions + avoid colours side by side
         col_a, col_b = st.columns(2)
 
         with col_a:
@@ -231,7 +296,6 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # Makeup tips
         st.subheader("💄 Makeup Tips")
         makeup = result.get("makeup_tips", {})
 

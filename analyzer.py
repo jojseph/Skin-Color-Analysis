@@ -1,26 +1,22 @@
 """
 analyzer.py
-Person 2 owns this file.
-Sends the face image + master prompt to the chosen VLM and returns parsed JSON.
+Sends the face image + master prompt to Google Gemini and returns parsed JSON.
 """
 
+import base64
 import json
 import os
 import re
 
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 load_dotenv()
 
-# ── Configuration ───────────────────────────────────────────────────────────────
-# Set this to "gemini" or "llava" before running.
-VLM_PROVIDER = "gemini"   # <-- CHANGE THIS to "llava" if using Ollama
-
 GEMINI_MODEL = "gemini-2.5-flash"
-LLAVA_MODEL  = "llava:13b"   # or "llava:7b" for the lighter version
 
 
-# ── Master prompt ───────────────────────────────────────────────────────────────
 PROMPT = """
 You are an expert colour analyst specialising in seasonal skin tone theory.
 Analyse the face in this image and determine the person's seasonal colour type.
@@ -47,67 +43,22 @@ fences, no explanation text before or after:
 """
 
 
-# ── JSON parser (with fallback) ────────────────────────────────────────────────
 def _parse_json(raw_text: str) -> dict:
-    """
-    Parse JSON from a VLM response string.
-    Falls back to regex extraction if the model adds extra text around the JSON.
-    """
+    """Parse JSON from Gemini response, with fallback for markdown-fenced output."""
     raw_text = raw_text.strip()
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError:
-        # LLaVA sometimes wraps JSON in markdown fences — strip them
         cleaned = re.sub(r"```(?:json)?|```", "", raw_text).strip()
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            # Last resort: extract the first {...} block
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if match:
                 return json.loads(match.group())
-            raise ValueError(f"Could not parse VLM response as JSON.\nRaw output:\n{raw_text}")
+            raise ValueError(f"Could not parse Gemini response as JSON.\nRaw output:\n{raw_text}")
 
 
-# ── Gemini implementation ───────────────────────────────────────────────────────
-def _analyze_gemini(base64_image: str) -> dict:
-    """Send image to Google Gemini and return parsed result dict."""
-    import google.generativeai as genai
-
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY not found. Check your .env file.")
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
-    image_part = {
-        "mime_type": "image/jpeg",
-        "data": base64_image,
-    }
-
-    response = model.generate_content([PROMPT, image_part])
-    return _parse_json(response.text)
-
-
-# ── LLaVA / Ollama implementation ──────────────────────────────────────────────
-def _analyze_llava(base64_image: str) -> dict:
-    """Send image to local LLaVA model via Ollama and return parsed result dict."""
-    import ollama
-
-    response = ollama.chat(
-        model=LLAVA_MODEL,
-        messages=[{
-            "role": "user",
-            "content": PROMPT,
-            "images": [base64_image],
-        }]
-    )
-    raw_text = response["message"]["content"]
-    return _parse_json(raw_text)
-
-
-# ── Public API ─────────────────────────────────────────────────────────────────
 def analyze(base64_image: str) -> dict:
     """
     Main entry point. Call this from app.py.
@@ -120,13 +71,23 @@ def analyze(base64_image: str) -> dict:
                         avoid_colors, makeup_tips, summary
 
     Raises:
-        ValueError  — if JSON cannot be parsed from the VLM response
-        EnvironmentError — if the API key is missing (Gemini only)
-        Exception   — if the API call fails (network error, rate limit, etc.)
+        ValueError       — if JSON cannot be parsed from the Gemini response
+        EnvironmentError — if GEMINI_API_KEY is missing
+        Exception        — if the API call fails (network error, rate limit, etc.)
     """
-    if VLM_PROVIDER == "gemini":
-        return _analyze_gemini(base64_image)
-    elif VLM_PROVIDER == "llava":
-        return _analyze_llava(base64_image)
-    else:
-        raise ValueError(f"Unknown VLM_PROVIDER: '{VLM_PROVIDER}'. Use 'gemini' or 'llava'.")
+    if not os.getenv("GEMINI_API_KEY"):
+        raise EnvironmentError("GEMINI_API_KEY not found. Check your .env file.")
+
+    client = genai.Client()
+
+    image_part = types.Part.from_bytes(
+        data=base64.b64decode(base64_image),
+        mime_type="image/jpeg",
+    )
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[image_part, PROMPT],
+    )
+
+    return _parse_json(response.text)
