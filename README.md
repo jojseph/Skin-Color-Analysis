@@ -1,6 +1,6 @@
 # Agarthan Skin Tone Analyzer (ASTA)
 
-A two-page Streamlit web app that takes a portrait photo, detects the face with OpenCV, and sends it to a Vision Language Model (VLM) to determine the user's **seasonal colour type** — Spring, Summer, Autumn, or Winter — along with a personalised colour palette, outfit suggestions, and makeup tips. A built-in **LLM report page** documents the model architecture and prompt engineering technique used.
+A two-page Streamlit web app that analyzes a portrait photo using **OpenCV** for face detection and a **Vision Language Model (VLM)** to infer the user’s **personal color type inspired by Korean color analysis**. It classifies the user into seasonal groups (Spring, Summer, Autumn, Winter) based on **undertone, depth, and chroma**, then generates a **personalized color palette**, **outfit recommendations**, and **makeup guidance**. A built-in **LLM report page** documents the model architecture and prompt engineering approach used.
 
 ## Pages
 
