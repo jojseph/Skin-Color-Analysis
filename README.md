@@ -25,13 +25,13 @@ Upload / Camera / Sample → Face detection & crop (OpenCV) → VLM analysis (Ge
 
 | Field | Description |
 |---|---|
-| `season` | Spring / Summer / Autumn / Winter |
-| `undertone` | warm / cool / neutral |
-| `palette` | 6 flattering hex colours |
-| `outfit_colors` | Recommended clothing tones |
-| `avoid_colors` | Colours to avoid |
-| `makeup_tips` | Foundation, blush, lips, eyes guidance |
-| `summary` | 2–3 sentence explanation |
+| `season` | Classify as Spring, Summer, Autumn, or Winter based on undertone, contrast (light vs deep), and chroma (soft vs vivid), reflecting overall color harmony. |
+| `undertone` | Determine warm, cool, or neutral by analyzing skin hue bias (yellow/golden, pink/blue, or balanced), supported by lighting response and visible cues. |
+| `palette` | Provide exactly 6 HEX colors optimized for the user’s undertone and season, including a mix of neutrals and accents suited to their contrast level. |
+| `outfit_colors` | Recommend wearable color groups (e.g., earthy, pastel, jewel, muted) that enhance skin clarity and maintain visual balance across outfits. |
+| `avoid_colors` | Identify color types that clash with undertone or contrast, including tones that make the skin appear dull, washed out, or overly harsh. |
+| `makeup_tips` | Suggest foundation undertone match and complementary blush, lip, and eye shades that enhance natural complexion without overpowering it. |
+| `summary` | Provide a concise 2–3 sentence explanation of how undertone, depth, and chroma define the user’s season and why the palette works. |
 
 ## Tech stack
 
