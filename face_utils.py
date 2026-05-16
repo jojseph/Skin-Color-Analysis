@@ -15,14 +15,28 @@ TARGET_SIZE = 512
 FACE_PADDING = 0.25
 
 _face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
+_profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
 
 def detect_and_crop_face(pil_image: Image.Image) -> Image.Image | None:
     """Detect the largest face in a PIL image and return a padded crop, or None."""
     img_rgb = np.array(pil_image.convert("RGB"))
     img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
 
-    faces = _face_cascade.detectMultiScale(img_gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    #faces = _face_cascade.detectMultiScale(img_gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    faces = _face_cascade.detectMultiScale(
+        img_gray,
+        scaleFactor=1.05,
+        minNeighbors=3,
+        minSize=(20, 20),
+    )
+
+    if len(faces) == 0:
+        faces = _profile_cascade.detectMultiScale(
+            img_gray,
+            scaleFactor=1.05,
+            minNeighbors=3,
+            minSize=(20, 20),
+        )
 
     if len(faces) == 0:
         return None

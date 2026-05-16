@@ -125,7 +125,6 @@ with st.sidebar:
     - Avoid heavy filters or extreme lighting
     """)
     st.divider()
-    st.caption("Powered by Google Gemini")
 
 
 # ── Session state ────────────────────────────────────────────────────────────────
