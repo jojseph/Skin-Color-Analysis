@@ -1,16 +1,35 @@
+# ASTA local app dependencies
+# Recommended Python: 3.11.x
+
 streamlit>=1.35.0
+
+# Image processing / face detection
 opencv-python==4.10.0.84
 Pillow>=10.0.0
-python-dotenv>=1.0.1
 numpy==1.26.4
-torch>=2.3.1
-torchvision>=0.18.1
-torchaudio>=2.3.1
-transformers>=4.41.0
-peft>=0.8.2
-accelerate>=0.30.0
+mediapipe>=0.10.14
+pyvips==3.1.1
+pyvips-binary==8.18.2
+
+# PyTorch stack
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
+
+# VLM / LoRA stack
+# Keep these pinned. Newer Transformers/PEFT versions caused Moondream/Phi + LoRA loading errors locally.
+transformers==4.41.2
+peft==0.8.2
+accelerate==0.30.1
 safetensors>=0.4.3
 einops>=0.8.0
 hf_xet>=1.0.0
-mediapipe>=0.10.14
+
+# Dataset generation / optional reporting utilities
 datasets>=2.19.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+tqdm>=4.66.0
+
+# Environment variables
+python-dotenv>=1.0.1
