@@ -20,9 +20,9 @@
   "revision": null,
   "target_modules": [
     "fc1",
-    "out_proj",
+    "linear",
     "fc2",
-    "linear"
+    "out_proj"
   ],
   "task_type": "CAUSAL_LM",
   "use_rslora": false

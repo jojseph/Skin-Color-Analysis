@@ -1,13 +1,14 @@
 """
 analyzer.py
-Local Moondream2 + LoRA inference for ASTA seasonal color analysis.
+Local Moondream2 + LoRA inference for ASTA 4-season color analysis.
 
-Current design:
-    cropped face image -> VLM -> {"season":"Autumn","subtype":"Deep"}
-    analyzer.py -> deterministic recommendation template -> Streamlit result
+Updated design:
+    cropped face image -> VLM -> {"season":"Autumn"}
+    analyzer.py -> deterministic generalized season recommendation template -> Streamlit result
 
-The model is responsible only for classification. The full palette/recommendation
-output is intentionally handled here for consistency and easier evaluation.
+The model is responsible only for 4-class season classification.
+The full palette/recommendation output is intentionally handled here for consistency
+and easier evaluation.
 """
 
 from __future__ import annotations
@@ -45,352 +46,138 @@ REVISION = os.getenv("ASTA_MODEL_REVISION", "2024-08-26")
 ADAPTER_DIR = Path(os.getenv("ASTA_ADAPTER_DIR", "moondream_season_lora"))
 
 PROMPT = """
-Classify this face into exactly one of these 12 seasonal color classes:
+Classify this face into exactly one of these 4 seasonal color classes:
 
-Autumn Deep, Autumn Soft, Autumn Warm,
-Spring Bright, Spring Light, Spring Warm,
-Summer Cool, Summer Light, Summer Soft,
-Winter Bright, Winter Cool, Winter Deep.
+Autumn, Spring, Summer, Winter.
 
 Return ONLY this JSON format:
-{"season":"Winter","subtype":"Deep"}
+{"season":"Winter"}
 
 No explanation. No markdown. No extra words.
-"""
+""".strip()
 
 
-SEASON_SUBTYPE_TEMPLATES = {
-    # ── AUTUMN ────────────────────────────────────────────────────────────────
-    "Autumn Deep": {
+SEASON_TEMPLATES = {
+    "Autumn": {
         "season": "Autumn",
-        "subtype": "Deep",
-        "full_season": "Autumn Deep",
+        "subtype": None,
+        "full_season": "Autumn",
         "undertone": "warm",
-        "palette": ["#4A2511", "#783F04", "#B45F06", "#38761D", "#274E13", "#7F6000"],
+        "characteristics": "Warm, earthy, rich, grounded, and muted-to-deep color harmony.",
+        "palette": ["#6B3F1D", "#8B4513", "#A65F2B", "#B8860B", "#556B2F", "#7A4E2D"],
         "outfit_colors": [
-            {"name": "Dark Tomato", "hex": "#BF360C"},
+            {"name": "Rust", "hex": "#B7410E"},
             {"name": "Olive Green", "hex": "#556B2F"},
+            {"name": "Camel", "hex": "#C19A6B"},
             {"name": "Chocolate Brown", "hex": "#381819"},
-            {"name": "Deep Rust", "hex": "#8B2500"},
+            {"name": "Mustard", "hex": "#D4A017"},
+            {"name": "Terracotta", "hex": "#E2725B"},
         ],
         "avoid_colors": [
-            {"name": "Icy Blue", "hex": "#E0FFFF"},
-            {"name": "Lavender", "hex": "#E6E6FA"},
+            {"name": "Icy Blue", "hex": "#D6F0FF"},
             {"name": "Cool Silver", "hex": "#C0C0C0"},
             {"name": "Neon Pink", "hex": "#FF1493"},
-        ],
-        "makeup_tips": {
-            "foundation": "Warm, golden, or yellow undertones. Matte or natural finish.",
-            "blush": "Terracotta, deep peach, brick red, or warm cinnamon.",
-            "lips": "Warm reds, burnt orange, deep brick, or brown-toned nudes.",
-            "eyes": "Bronze, copper, espresso brown, and deep forest green.",
-        },
-        "summary": "Your features align with Autumn Deep, which suits rich, warm, earthy, and high-depth shades.",
-    },
-    "Autumn Soft": {
-        "season": "Autumn",
-        "subtype": "Soft",
-        "full_season": "Autumn Soft",
-        "undertone": "warm",
-        "palette": ["#8B7D6B", "#CD853F", "#D2B48C", "#556B2F", "#8FBC8F", "#BC8F8F"],
-        "outfit_colors": [
-            {"name": "Muted Olive", "hex": "#6B8E23"},
-            {"name": "Warm Taupe", "hex": "#8B8589"},
-            {"name": "Dusty Coral", "hex": "#D08C7F"},
-            {"name": "Soft Camel", "hex": "#C19A6B"},
-        ],
-        "avoid_colors": [
-            {"name": "Neon Pink", "hex": "#FF1493"},
-            {"name": "Stark Black", "hex": "#000000"},
-            {"name": "Icy White", "hex": "#F8FFFF"},
-            {"name": "Electric Blue", "hex": "#0000FF"},
-        ],
-        "makeup_tips": {
-            "foundation": "Warm to neutral undertones. Satin or natural finish.",
-            "blush": "Soft peach, dusty coral, muted apricot, or warm rose.",
-            "lips": "Muted salmon, soft brownish-pink, warm nude, or terracotta rose.",
-            "eyes": "Khaki, taupe, soft moss green, and muted bronze.",
-        },
-        "summary": "Your features align with Autumn Soft, which suits warm, muted, earthy, and blended shades.",
-    },
-    "Autumn Warm": {
-        "season": "Autumn",
-        "subtype": "Warm",
-        "full_season": "Autumn Warm",
-        "undertone": "warm",
-        "palette": ["#8B4513", "#D2691E", "#B8860B", "#DAA520", "#556B2F", "#8B0000"],
-        "outfit_colors": [
-            {"name": "Rust", "hex": "#8B4500"},
-            {"name": "Mustard Yellow", "hex": "#FFDB58"},
-            {"name": "Pumpkin", "hex": "#FF7518"},
-            {"name": "Warm Olive", "hex": "#808000"},
-        ],
-        "avoid_colors": [
-            {"name": "Fuchsia", "hex": "#FF00FF"},
-            {"name": "Baby Blue", "hex": "#89CFF0"},
-            {"name": "Cool Gray", "hex": "#808080"},
-            {"name": "Icy Pink", "hex": "#F8C8DC"},
-        ],
-        "makeup_tips": {
-            "foundation": "Distinctly warm, yellow-based, or golden. Fresh luminous finish.",
-            "blush": "Rich apricot, warm brick, copper peach, or burnt coral.",
-            "lips": "Copper, brick red, warm terracotta, or orange-red.",
-            "eyes": "Gold, warm browns, olive, copper, and bronze.",
-        },
-        "summary": "Your features align with Autumn Warm, which suits rich, spicy, golden, and earthy shades.",
-    },
-
-    # ── SUMMER ────────────────────────────────────────────────────────────────
-    "Summer Cool": {
-        "season": "Summer",
-        "subtype": "Cool",
-        "full_season": "Summer Cool",
-        "undertone": "cool",
-        "palette": ["#4682B4", "#6495ED", "#7B68EE", "#DDA0DD", "#FFB6C1", "#708090"],
-        "outfit_colors": [
-            {"name": "Cornflower Blue", "hex": "#6495ED"},
-            {"name": "Soft Plum", "hex": "#DDA0DD"},
-            {"name": "Rose Pink", "hex": "#FFB6C1"},
-            {"name": "Slate Blue", "hex": "#6A5ACD"},
-        ],
-        "avoid_colors": [
-            {"name": "Goldenrod", "hex": "#DAA520"},
-            {"name": "Warm Rust", "hex": "#8B4500"},
-            {"name": "Orange", "hex": "#FFA500"},
-            {"name": "Mustard", "hex": "#FFDB58"},
-        ],
-        "makeup_tips": {
-            "foundation": "Distinctly cool, pink-based, or neutral-cool. Matte to satin finish.",
-            "blush": "Cool pink, soft berry, rose, or muted raspberry.",
-            "lips": "Rose pink, soft raspberry, muted berry, or cool mauve.",
-            "eyes": "Slate grey, cool blue, silver, taupe, and soft charcoal.",
-        },
-        "summary": "Your features align with Summer Cool, which suits purely cool, soft, and refreshing shades.",
-    },
-    "Summer Light": {
-        "season": "Summer",
-        "subtype": "Light",
-        "full_season": "Summer Light",
-        "undertone": "cool",
-        "palette": ["#E0FFFF", "#ADD8E6", "#E6E6FA", "#FFF0F5", "#F0F8FF", "#B0E0E6"],
-        "outfit_colors": [
-            {"name": "Powder Blue", "hex": "#B0E0E6"},
-            {"name": "Soft Lavender", "hex": "#E6E6FA"},
-            {"name": "Pale Pink", "hex": "#FADADD"},
-            {"name": "Icy Mint", "hex": "#D8FFF0"},
-        ],
-        "avoid_colors": [
-            {"name": "Dark Brown", "hex": "#654321"},
-            {"name": "Burnt Orange", "hex": "#CC5500"},
-            {"name": "Black", "hex": "#000000"},
-            {"name": "Deep Burgundy", "hex": "#800020"},
-        ],
-        "makeup_tips": {
-            "foundation": "Light, cool, or neutral undertones. Sheer or soft natural finish.",
-            "blush": "Pale pink, light watermelon, soft rose, or cool peach-pink.",
-            "lips": "Sheer pink, light rose gloss, soft berry tint, or cool nude.",
-            "eyes": "Soft ash brown, pale grey, icy blue, lavender, and soft taupe.",
-        },
-        "summary": "Your features align with Summer Light, which suits delicate, airy, cool, and pastel shades.",
-    },
-    "Summer Soft": {
-        "season": "Summer",
-        "subtype": "Soft",
-        "full_season": "Summer Soft",
-        "undertone": "cool",
-        "palette": ["#B0C4DE", "#D8BFD8", "#C0C0C0", "#778899", "#E6E6FA", "#FFE4E1"],
-        "outfit_colors": [
-            {"name": "Dusty Rose", "hex": "#DCAE96"},
-            {"name": "Slate Blue", "hex": "#6A5ACD"},
-            {"name": "Mauve", "hex": "#B784A7"},
-            {"name": "Soft Gray", "hex": "#B8B8B8"},
-        ],
-        "avoid_colors": [
-            {"name": "Neon Orange", "hex": "#FF4500"},
-            {"name": "Chartreuse", "hex": "#7FFF00"},
-            {"name": "Pure Black", "hex": "#000000"},
-            {"name": "Bright Yellow", "hex": "#FFFF00"},
-        ],
-        "makeup_tips": {
-            "foundation": "Cool, pink, or neutral undertones. Satin or soft natural finish.",
-            "blush": "Soft mauve, dusty rose, muted pink, or gentle berry.",
-            "lips": "Muted berry, plum, soft cool pink, or mauve rose.",
-            "eyes": "Charcoal, taupe, cool grey, muted navy, and soft lavender.",
-        },
-        "summary": "Your features align with Summer Soft, which suits cool, muted, dusty, and gentle shades.",
-    },
-
-    # ── WINTER ────────────────────────────────────────────────────────────────
-    "Winter Bright": {
-        "season": "Winter",
-        "subtype": "Bright",
-        "full_season": "Winter Bright",
-        "undertone": "cool",
-        "palette": ["#FF007F", "#0000FF", "#39FF14", "#FF1493", "#00FA9A", "#FFFFFF"],
-        "outfit_colors": [
-            {"name": "Hot Pink", "hex": "#FF69B4"},
-            {"name": "Cobalt Blue", "hex": "#0047AB"},
             {"name": "Pure White", "hex": "#FFFFFF"},
-            {"name": "Clear Red", "hex": "#FF0000"},
-        ],
-        "avoid_colors": [
-            {"name": "Dusty Brown", "hex": "#8B7D6B"},
-            {"name": "Muted Beige", "hex": "#F5F5DC"},
-            {"name": "Warm Camel", "hex": "#C19A6B"},
-            {"name": "Muddy Olive", "hex": "#6B6B2E"},
         ],
         "makeup_tips": {
-            "foundation": "Neutral to cool undertones. Clear, luminous, polished finish.",
-            "blush": "Vibrant pink, cool berry, clear rose, or bright fuchsia.",
-            "lips": "Ruby red, electric pink, blue-red, or bright berry.",
-            "eyes": "High contrast liner, icy shimmer, black, silver, and cobalt accents.",
+            "foundation": "Warm, golden, yellow-based, or neutral-warm undertones. Natural, satin, or soft matte finish.",
+            "blush": "Peach, apricot, terracotta, warm rose, cinnamon, or muted coral.",
+            "lips": "Terracotta, brick red, burnt orange, warm nude, copper rose, or brown-red.",
+            "eyes": "Bronze, copper, olive, warm brown, caramel, espresso, and muted gold.",
         },
-        "summary": "Your features align with Winter Bright, which suits clear, high-contrast, vivid, and cool shades.",
+        "summary": "Your features align with Autumn, which generally suits warm, earthy, rich, and natural shades. Avoid icy, neon, and overly cool colors because they can overpower or dull Autumn harmony.",
     },
-    "Winter Cool": {
-        "season": "Winter",
-        "subtype": "Cool",
-        "full_season": "Winter Cool",
-        "undertone": "cool",
-        "palette": ["#0000CD", "#DC143C", "#8A2BE2", "#FF00FF", "#00FFFF", "#C0C0C0"],
-        "outfit_colors": [
-            {"name": "Royal Blue", "hex": "#4169E1"},
-            {"name": "True Red", "hex": "#FF0000"},
-            {"name": "Icy Silver", "hex": "#C0C0C0"},
-            {"name": "Cool Violet", "hex": "#8A2BE2"},
-        ],
-        "avoid_colors": [
-            {"name": "Terracotta", "hex": "#E2725B"},
-            {"name": "Olive Green", "hex": "#808000"},
-            {"name": "Mustard", "hex": "#FFDB58"},
-            {"name": "Warm Beige", "hex": "#D8C3A5"},
-        ],
-        "makeup_tips": {
-            "foundation": "Strictly cool, pink, blue-based, or neutral-cool. Flawless finish.",
-            "blush": "Bright fuchsia, cool magenta, icy pink, or blue-based rose.",
-            "lips": "True blue-red, vivid pink, berry red, or cool plum.",
-            "eyes": "Silver, icy white, deep navy, charcoal, and black liner.",
-        },
-        "summary": "Your features align with Winter Cool, which suits icy, vivid, purely cool, and saturated shades.",
-    },
-    "Winter Deep": {
-        "season": "Winter",
-        "subtype": "Deep",
-        "full_season": "Winter Deep",
-        "undertone": "cool",
-        "palette": ["#000000", "#191970", "#4B0082", "#800000", "#006400", "#483D8B"],
-        "outfit_colors": [
-            {"name": "Midnight Blue", "hex": "#191970"},
-            {"name": "Burgundy", "hex": "#800000"},
-            {"name": "Black", "hex": "#000000"},
-            {"name": "Deep Emerald", "hex": "#006400"},
-        ],
-        "avoid_colors": [
-            {"name": "Warm Peach", "hex": "#FFDAB9"},
-            {"name": "Mustard", "hex": "#FFDB58"},
-            {"name": "Light Beige", "hex": "#F5F5DC"},
-            {"name": "Soft Apricot", "hex": "#FBCEB1"},
-        ],
-        "makeup_tips": {
-            "foundation": "Cool, neutral, or neutral-olive undertones. Matte or polished finish.",
-            "blush": "Deep plum, rich berry, wine rose, or cool red.",
-            "lips": "Deep burgundy, classic crimson, wine, or dark berry.",
-            "eyes": "Black eyeliner, deep charcoal, navy, espresso, and jewel-toned shadow.",
-        },
-        "summary": "Your features align with Winter Deep, which suits dark, cool, bold, and intense shades.",
-    },
-
-    # ── SPRING ────────────────────────────────────────────────────────────────
-    "Spring Bright": {
+    "Spring": {
         "season": "Spring",
-        "subtype": "Bright",
-        "full_season": "Spring Bright",
+        "subtype": None,
+        "full_season": "Spring",
         "undertone": "warm",
-        "palette": ["#FF003F", "#00CED1", "#7CFC00", "#FF1493", "#FFFF00", "#FF4500"],
-        "outfit_colors": [
-            {"name": "Turquoise", "hex": "#40E0D0"},
-            {"name": "Clear Red", "hex": "#FF0000"},
-            {"name": "Bright Coral", "hex": "#FF7F50"},
-            {"name": "Clear Yellow", "hex": "#FFFF00"},
-        ],
-        "avoid_colors": [
-            {"name": "Muted Olive", "hex": "#808000"},
-            {"name": "Dusty Blue", "hex": "#5F9EA0"},
-            {"name": "Charcoal Gray", "hex": "#36454F"},
-            {"name": "Muddy Brown", "hex": "#70543E"},
-        ],
-        "makeup_tips": {
-            "foundation": "Neutral to warm undertones. Clear and luminous finish.",
-            "blush": "Vibrant coral-pink, clear peach, watermelon, or bright apricot.",
-            "lips": "Watermelon, bright poppy red, clear coral, or warm pink.",
-            "eyes": "Clear gold, bright turquoise, warm brown liner, and fresh shimmer.",
-        },
-        "summary": "Your features align with Spring Bright, which suits vivid, warm, clear, and high-energy shades.",
-    },
-    "Spring Light": {
-        "season": "Spring",
-        "subtype": "Light",
-        "full_season": "Spring Light",
-        "undertone": "warm",
-        "palette": ["#FFDAB9", "#98FB98", "#AFEEEE", "#FFFACD", "#FFB6C1", "#E0FFFF"],
-        "outfit_colors": [
-            {"name": "Warm Peach", "hex": "#FFDAB9"},
-            {"name": "Light Aqua", "hex": "#E0FFFF"},
-            {"name": "Soft Coral", "hex": "#F88379"},
-            {"name": "Light Mint", "hex": "#98FB98"},
-        ],
-        "avoid_colors": [
-            {"name": "Black", "hex": "#000000"},
-            {"name": "Dark Burgundy", "hex": "#800000"},
-            {"name": "Deep Navy", "hex": "#000080"},
-            {"name": "Heavy Brown", "hex": "#4B2E1E"},
-        ],
-        "makeup_tips": {
-            "foundation": "Light, warm, or neutral-warm base. Dewy or fresh finish.",
-            "blush": "Soft apricot, warm pink, peach, or light coral.",
-            "lips": "Peach gloss, light coral, soft warm rose, or sheer watermelon.",
-            "eyes": "Champagne, soft warm brown, light gold, and peachy beige.",
-        },
-        "summary": "Your features align with Spring Light, which suits light, warm, clear, and delicate pastel shades.",
-    },
-    "Spring Warm": {
-        "season": "Spring",
-        "subtype": "Warm",
-        "full_season": "Spring Warm",
-        "undertone": "warm",
-        "palette": ["#FF7F50", "#FFA500", "#32CD32", "#FFD700", "#1E90FF", "#FF4500"],
+        "characteristics": "Warm, fresh, clear, bright, and lively color harmony.",
+        "palette": ["#FF7F50", "#FFD700", "#FFA500", "#98FB98", "#40E0D0", "#FFB347"],
         "outfit_colors": [
             {"name": "Coral", "hex": "#FF7F50"},
             {"name": "Golden Yellow", "hex": "#FFD700"},
             {"name": "Fresh Green", "hex": "#32CD32"},
-            {"name": "Warm Orange", "hex": "#FFA500"},
+            {"name": "Peach", "hex": "#FFDAB9"},
+            {"name": "Turquoise", "hex": "#40E0D0"},
+            {"name": "Warm Aqua", "hex": "#66D9D9"},
         ],
         "avoid_colors": [
-            {"name": "Slate Grey", "hex": "#708090"},
+            {"name": "Charcoal Gray", "hex": "#36454F"},
+            {"name": "Black", "hex": "#000000"},
             {"name": "Dusty Mauve", "hex": "#B08D9B"},
-            {"name": "Icy Blue", "hex": "#D6F0FF"},
-            {"name": "Cool Burgundy", "hex": "#800020"},
+            {"name": "Muddy Olive", "hex": "#6B6B2E"},
         ],
         "makeup_tips": {
-            "foundation": "Warm, golden, or yellow-based. Fresh radiant finish.",
-            "blush": "Bright coral, warm peach, apricot, or golden pink.",
-            "lips": "Warm orange-red, vibrant coral, peach-red, or bright warm rose.",
-            "eyes": "Bronze, warm gold, caramel brown, and vibrant teal liner.",
+            "foundation": "Warm, golden, peachy, or neutral-warm undertones. Fresh, radiant, or dewy finish.",
+            "blush": "Peach, coral-pink, apricot, warm pink, or soft watermelon.",
+            "lips": "Coral, peach-red, warm pink, watermelon, sheer orange-red, or fresh rose.",
+            "eyes": "Champagne, light gold, warm brown, caramel, peach beige, and soft teal accents.",
         },
-        "summary": "Your features align with Spring Warm, which suits bright, sunny, golden, and energetic shades.",
+        "summary": "Your features align with Spring, which generally suits warm, clear, bright, and fresh colors. Avoid heavy, dusty, dark, or muddy shades because they can make Spring features look flat.",
+    },
+    "Summer": {
+        "season": "Summer",
+        "subtype": None,
+        "full_season": "Summer",
+        "undertone": "cool",
+        "characteristics": "Cool, soft, gentle, muted, and refined color harmony.",
+        "palette": ["#B0C4DE", "#A7C7E7", "#D8BFD8", "#C8A2C8", "#B8B8B8", "#DCAE96"],
+        "outfit_colors": [
+            {"name": "Dusty Rose", "hex": "#DCAE96"},
+            {"name": "Powder Blue", "hex": "#B0E0E6"},
+            {"name": "Mauve", "hex": "#B784A7"},
+            {"name": "Soft Lavender", "hex": "#E6E6FA"},
+            {"name": "Slate Blue", "hex": "#6A5ACD"},
+            {"name": "Cool Gray", "hex": "#B8B8B8"},
+        ],
+        "avoid_colors": [
+            {"name": "Orange", "hex": "#FFA500"},
+            {"name": "Mustard", "hex": "#D4A017"},
+            {"name": "Neon Green", "hex": "#39FF14"},
+            {"name": "Stark Black", "hex": "#000000"},
+        ],
+        "makeup_tips": {
+            "foundation": "Cool, pink-based, or neutral-cool undertones. Soft matte, satin, or natural finish.",
+            "blush": "Cool pink, dusty rose, mauve, soft berry, muted raspberry, or gentle rose.",
+            "lips": "Rose pink, mauve, muted berry, cool nude, soft plum, or raspberry tint.",
+            "eyes": "Taupe, cool gray, slate, soft navy, lavender, ash brown, and muted charcoal.",
+        },
+        "summary": "Your features align with Summer, which generally suits cool, soft, muted, and gentle shades. Avoid harsh black, neon colors, and strong warm oranges because they can overwhelm Summer harmony.",
+    },
+    "Winter": {
+        "season": "Winter",
+        "subtype": None,
+        "full_season": "Winter",
+        "undertone": "cool",
+        "characteristics": "Cool, clear, high-contrast, saturated, and sharp color harmony.",
+        "palette": ["#000000", "#FFFFFF", "#0047AB", "#DC143C", "#4B0082", "#C0C0C0"],
+        "outfit_colors": [
+            {"name": "Black", "hex": "#000000"},
+            {"name": "Pure White", "hex": "#FFFFFF"},
+            {"name": "Cobalt Blue", "hex": "#0047AB"},
+            {"name": "True Red", "hex": "#FF0000"},
+            {"name": "Emerald", "hex": "#006B54"},
+            {"name": "Royal Purple", "hex": "#4B0082"},
+        ],
+        "avoid_colors": [
+            {"name": "Camel", "hex": "#C19A6B"},
+            {"name": "Muted Beige", "hex": "#D8C3A5"},
+            {"name": "Mustard", "hex": "#D4A017"},
+            {"name": "Dusty Brown", "hex": "#8B7D6B"},
+        ],
+        "makeup_tips": {
+            "foundation": "Cool, neutral, neutral-olive, or pink-based undertones. Polished, satin, or matte finish.",
+            "blush": "Cool rose, berry, plum, icy pink, wine rose, or clear red-pink.",
+            "lips": "Blue-red, berry, burgundy, cool plum, crimson, or vivid pink.",
+            "eyes": "Black liner, charcoal, navy, silver, icy shimmer, deep espresso, and jewel tones.",
+        },
+        "summary": "Your features align with Winter, which generally suits cool, saturated, crisp, and high-contrast shades. Avoid warm muddy earth tones because they can make Winter features look dull.",
     },
 }
 
 
-
 VALID_SEASONS = {"Spring", "Summer", "Autumn", "Winter"}
-VALID_SUBTYPES = {"Bright", "Light", "Warm", "Soft", "Cool", "Deep"}
-DEFAULT_SUBTYPE = {
-    "Spring": "Warm",
-    "Summer": "Soft",
-    "Autumn": "Warm",
-    "Winter": "Cool",
-}
 
 _model = None
 _tokenizer = None
@@ -408,16 +195,16 @@ def _normalize_word(value: Any, valid_values: set[str]) -> str | None:
     return None
 
 
-def _extract_season_subtype(raw_text: str) -> tuple[str | None, str | None]:
+def _extract_season(raw_text: str) -> str | None:
     """
     Handles outputs such as:
-        {"season":"Autumn","subtype":"Deep"}
-        Autumn Deep
-        season: Autumn subtype: Deep
+        {"season":"Autumn"}
+        Autumn
+        season: Autumn
         ```json ... ```
     """
     if not raw_text:
-        return None, None
+        return None
 
     cleaned = str(raw_text).strip()
     cleaned = re.sub(r"```(?:json)?", "", cleaned, flags=re.IGNORECASE).replace("```", "").strip()
@@ -426,10 +213,7 @@ def _extract_season_subtype(raw_text: str) -> tuple[str | None, str | None]:
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
-            return (
-                _normalize_word(parsed.get("season"), VALID_SEASONS),
-                _normalize_word(parsed.get("subtype"), VALID_SUBTYPES),
-            )
+            return _normalize_word(parsed.get("season"), VALID_SEASONS)
     except json.JSONDecodeError:
         pass
 
@@ -439,51 +223,29 @@ def _extract_season_subtype(raw_text: str) -> tuple[str | None, str | None]:
         try:
             parsed = json.loads(match.group())
             if isinstance(parsed, dict):
-                return (
-                    _normalize_word(parsed.get("season"), VALID_SEASONS),
-                    _normalize_word(parsed.get("subtype"), VALID_SUBTYPES),
-                )
+                return _normalize_word(parsed.get("season"), VALID_SEASONS)
         except json.JSONDecodeError:
             pass
 
     # 3) Plain text extraction.
-    season = None
-    subtype = None
-
     for valid_season in sorted(VALID_SEASONS):
-        if re.search(rf"{valid_season}", cleaned, re.IGNORECASE):
-            season = valid_season
-            break
+        if re.search(rf"\b{valid_season}\b", cleaned, re.IGNORECASE):
+            return valid_season
 
-    for valid_subtype in sorted(VALID_SUBTYPES):
-        if re.search(rf"{valid_subtype}", cleaned, re.IGNORECASE):
-            subtype = valid_subtype
-            break
-
-    return season, subtype
+    return None
 
 
-def _template_from_prediction(season: str, subtype: str | None) -> dict:
-    if subtype is not None:
-        key = f"{season} {subtype}"
-        if key in SEASON_SUBTYPE_TEMPLATES:
-            return copy.deepcopy(SEASON_SUBTYPE_TEMPLATES[key])
-
-    fallback_subtype = DEFAULT_SUBTYPE[season]
-    fallback_key = f"{season} {fallback_subtype}"
-    result = copy.deepcopy(SEASON_SUBTYPE_TEMPLATES[fallback_key])
-    result["fallback_used"] = True
-    result["fallback_reason"] = "Model did not return a valid subtype."
-    return result
+def _template_from_prediction(season: str) -> dict:
+    return copy.deepcopy(SEASON_TEMPLATES[season])
 
 
 def _parse_model_response(raw_text: str) -> dict:
-    season, subtype = _extract_season_subtype(raw_text)
+    season = _extract_season(raw_text)
 
     if season is None:
         raise ValueError(f"Could not determine season from model response. Raw output: {raw_text!r}")
 
-    result = _template_from_prediction(season, subtype)
+    result = _template_from_prediction(season)
     result["raw_model_response"] = raw_text
     return result
 
@@ -525,7 +287,7 @@ def _attach_lora_adapter(model: Any) -> tuple[Any, str]:
     if not ADAPTER_DIR.exists():
         raise FileNotFoundError(
             f"Fine-tuned LoRA adapter folder not found: {ADAPTER_DIR}. "
-            "Place the trained adapter folder in the project root, or set ASTA_ADAPTER_DIR."
+            "Place the trained 4-season adapter folder in the project root, or set ASTA_ADAPTER_DIR."
         )
 
     if not hasattr(model, "text_model"):
@@ -535,7 +297,6 @@ def _attach_lora_adapter(model: Any) -> tuple[Any, str]:
         )
 
     # Patch again immediately before PEFT wraps text_model.
-    # This matters because some configs are initialized lazily.
     dummy_tokenizer_pad = getattr(getattr(model, "text_model", None), "config", None)
     if dummy_tokenizer_pad is not None and not hasattr(dummy_tokenizer_pad, "pad_token_id"):
         object.__setattr__(dummy_tokenizer_pad, "pad_token_id", getattr(dummy_tokenizer_pad, "eos_token_id", 0))
@@ -670,7 +431,7 @@ def analyze(base64_image: str) -> dict:
         base64_image: Base64-encoded JPEG string from face_utils.process_pil_image().
 
     Returns:
-        Full seasonal color result dictionary expected by the UI.
+        Full generalized seasonal color result dictionary expected by the UI.
     """
     model, tokenizer, adapter_mode = _load_model()
 

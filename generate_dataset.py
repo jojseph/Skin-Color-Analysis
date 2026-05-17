@@ -2,24 +2,28 @@
 generate_dataset.py
 Builds JSONL files for ASTA VLM fine-tuning.
 
-Current project structure:
+Updated for the simplified 4-class seasonal color setup.
+
+Expected project structure:
     data/rgb/
     ├── train/
-    │   ├── autumn_deep/
-    │   ├── autumn_soft/
-    │   └── ... 12 total class folders
+    │   ├── autumn/
+    │   ├── spring/
+    │   ├── summer/
+    │   └── winter/
     └── test/
-        ├── autumn_deep/
-        ├── autumn_soft/
-        └── ... 12 total class folders
+        ├── autumn/
+        ├── spring/
+        ├── summer/
+        └── winter/
 
 Output:
     data/moondream_train_classification.jsonl
     data/moondream_test_classification.jsonl
-    data/training_crops/<split>/<class_name>/...
+    data/training_crops/<split>/<season>/...
 
-The JSONL target intentionally contains only season + subtype.
-The app/analyzer expands the prediction into palettes and recommendations later.
+The JSONL target intentionally contains only the main season.
+The app/analyzer expands the prediction into generalized palettes and recommendations later.
 """
 
 from __future__ import annotations
@@ -47,26 +51,27 @@ DEFAULT_TEST_OUTPUT = Path("./data/moondream_test_classification.jsonl")
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp"}
 RANDOM_SEED = 42
 
-CLASS_MAP: dict[str, tuple[str, str]] = {
-    "autumn_deep": ("Autumn", "Deep"),
-    "autumn_soft": ("Autumn", "Soft"),
-    "autumn_warm": ("Autumn", "Warm"),
-    "spring_bright": ("Spring", "Bright"),
-    "spring_light": ("Spring", "Light"),
-    "spring_warm": ("Spring", "Warm"),
-    "summer_cool": ("Summer", "Cool"),
-    "summer_light": ("Summer", "Light"),
-    "summer_soft": ("Summer", "Soft"),
-    "winter_bright": ("Winter", "Bright"),
-    "winter_cool": ("Winter", "Cool"),
-    "winter_deep": ("Winter", "Deep"),
+CLASS_NAMES = ["autumn", "spring", "summer", "winter"]
+
+CLASS_MAP: dict[str, str] = {
+    "autumn": "Autumn",
+    "spring": "Spring",
+    "summer": "Summer",
+    "winter": "Winter",
 }
 
-TRAINING_PROMPTS = [
-    "Classify this person's seasonal color type. Return only JSON with season and subtype.",
-    "Identify this person's personal color season and subtype. Return only JSON with season and subtype.",
-    "Analyze this face and classify the seasonal color category. Return only a JSON object with season and subtype.",
-]
+TRAINING_PROMPT = """
+Classify this face into exactly one of these 4 seasonal color classes:
+
+Autumn, Spring, Summer, Winter.
+
+Return ONLY this JSON format:
+{"season":"Winter"}
+
+No explanation. No markdown. No extra words.
+""".strip()
+
+TRAINING_PROMPTS = [TRAINING_PROMPT]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,9 +82,9 @@ def clean_filename(value: str) -> str:
     return value.strip("_") or "image"
 
 
-def make_answer(season: str, subtype: str) -> str:
+def make_answer(season: str) -> str:
     return json.dumps(
-        {"season": season, "subtype": subtype},
+        {"season": season},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -95,7 +100,7 @@ def validate_dataset_structure(dataset_dir: Path) -> None:
             missing.append(str(split_dir))
             continue
 
-        found_class_dirs = {p.name for p in split_dir.iterdir() if p.is_dir()}
+        found_class_dirs = {p.name.lower() for p in split_dir.iterdir() if p.is_dir()}
         expected_class_dirs = set(CLASS_MAP)
 
         missing.extend(str(split_dir / class_name) for class_name in sorted(expected_class_dirs - found_class_dirs))
@@ -119,7 +124,7 @@ def collect_images(dataset_dir: Path, split: str) -> list[tuple[Path, str]]:
     split_dir = dataset_dir / split
     items: list[tuple[Path, str]] = []
 
-    for class_name in sorted(CLASS_MAP):
+    for class_name in CLASS_NAMES:
         class_dir = split_dir / class_name
         if not class_dir.exists():
             continue
@@ -163,8 +168,7 @@ def build_sample(
     crop_dir: Path,
     use_original_if_no_face: bool,
 ) -> tuple[dict | None, str | None]:
-    season, subtype = CLASS_MAP[class_name]
-    full_label = f"{season} {subtype}"
+    season = CLASS_MAP[class_name]
 
     try:
         pil_image = Image.open(image_path).convert("RGB")
@@ -189,7 +193,7 @@ def build_sample(
             "qa": [
                 {
                     "question": random.choice(TRAINING_PROMPTS),
-                    "answer": make_answer(season, subtype),
+                    "answer": make_answer(season),
                 }
             ],
         }
@@ -229,8 +233,7 @@ def write_jsonl(
                 continue
 
             f.write(json.dumps(sample, ensure_ascii=False) + "\n")
-            season, subtype = CLASS_MAP[class_name]
-            counts[f"{season} {subtype}"] += 1
+            counts[CLASS_MAP[class_name]] += 1
 
     return counts, status_counts
 
@@ -239,18 +242,9 @@ def print_counts(title: str, counts: Counter) -> None:
     print(f"\n{title}")
     print("-" * len(title))
 
-    for class_name in sorted(CLASS_MAP):
-        season, subtype = CLASS_MAP[class_name]
-        full_label = f"{season} {subtype}"
-        print(f"{full_label}: {counts[full_label]}")
-
-    season_counts: Counter = Counter()
-    for full_label, count in counts.items():
-        season_counts[full_label.split()[0]] += count
-
-    print("\nMain season totals:")
-    for season in ["Autumn", "Spring", "Summer", "Winter"]:
-        print(f"{season}: {season_counts[season]}")
+    for class_name in CLASS_NAMES:
+        season = CLASS_MAP[class_name]
+        print(f"{season}: {counts[season]}")
 
 
 def build_dataset(args: argparse.Namespace) -> None:
@@ -292,7 +286,7 @@ def build_dataset(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate ASTA JSONL files for VLM fine-tuning.")
+    parser = argparse.ArgumentParser(description="Generate ASTA JSONL files for 4-class VLM fine-tuning.")
     parser.add_argument("--dataset-dir", default=str(DEFAULT_DATASET_DIR), help="Root dataset folder. Default: ./data/rgb")
     parser.add_argument("--crop-dir", default=str(DEFAULT_CROP_DIR), help="Where cropped faces are saved.")
     parser.add_argument("--train-output", default=str(DEFAULT_TRAIN_OUTPUT), help="Train JSONL output path.")
