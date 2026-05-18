@@ -1,669 +1,523 @@
 """
 pages/1_📊_Report.py
-Academic mini-project report on the LLM/VLM used in the Agarthan Skin Tone Analyzer.
-Reference: MIT 6.S191 (2025) — "Large Language Models" lecture (Google).
+Academic mini-project report for ASTA under the LLM/VLM track.
+
+Current implementation:
+    Deep Armocromia face dataset
+    -> OpenCV face crop
+    -> Moondream2 Vision-Language Model
+    -> LoRA fine-tuning
+    -> 4-class seasonal colour classification
+    -> deterministic recommendation templates
 """
+
+from __future__ import annotations
+
+from pathlib import Path
 
 import streamlit as st
 
+try:
+    import pandas as pd
+except Exception:  # Keeps the page usable even if pandas is not installed.
+    pd = None
+
+
+# ── Page setup ──────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Project Report — ASTA",
+    page_title="CS346 Mini-Project Report — ASTA",
     page_icon="📊",
     layout="wide",
 )
 
-st.title("📊 Project Report on Large Language Models (LLMs)")
-st.subheader("Agarthan Skin Tone Analyzer (ASTA)")
-st.caption("Reference: MIT 6.S191 Introduction to Deep Learning (2025) — Large Language Models (Google)")
+st.title("📊 CS346 Mini-Project Report")
+st.subheader("Agarthan Skin Tone Analyzer (ASTA): 4-Season Classification using a Fine-Tuned Vision-Language Model")
+st.caption("Mini-project category: Large Language Models (LLMs) / Vision-Language Models (VLMs)")
 st.divider()
+
+
+# ── Helper data ─────────────────────────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
+PREDICTIONS_CSV = PROJECT_ROOT / "data" / "moondream2_test_predictions.csv"
+CONFUSION_CSV = PROJECT_ROOT / "data" / "moondream2_confusion_matrix.csv"
+
+STATIC_METRICS = {
+    "JSON / parse validity rate": "100.00%",
+    "Season accuracy": "51.54%",
+    "Test samples": "912",
+    "Classes": "4 — Autumn, Spring, Summer, Winter",
+}
+
+CLASSIFICATION_REPORT = [
+    {"Class": "Autumn", "Precision": 0.60, "Recall": 0.30, "F1-score": 0.40, "Support": 259},
+    {"Class": "Spring", "Precision": 0.47, "Recall": 0.17, "F1-score": 0.25, "Support": 203},
+    {"Class": "Summer", "Precision": 0.40, "Recall": 0.83, "F1-score": 0.54, "Support": 186},
+    {"Class": "Winter", "Precision": 0.62, "Recall": 0.78, "F1-score": 0.69, "Support": 264},
+]
+
+CONFUSION_MATRIX = [
+    {"Actual": "Autumn", "Autumn": 77, "Spring": 26, "Summer": 65, "Winter": 91},
+    {"Actual": "Spring", "Autumn": 18, "Spring": 34, "Summer": 137, "Winter": 14},
+    {"Actual": "Summer", "Autumn": 7, "Spring": 6, "Summer": 154, "Winter": 19},
+    {"Actual": "Winter", "Autumn": 26, "Spring": 6, "Summer": 27, "Winter": 205},
+]
+
+
+def show_metric_cards(metrics: dict[str, str]) -> None:
+    cols = st.columns(len(metrics))
+    for col, (label, value) in zip(cols, metrics.items()):
+        col.metric(label, value)
+
+
+def load_optional_dataframe(path: Path):
+    if pd is None or not path.exists():
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
+
 
 
 # ── 1. Project Overview ──────────────────────────────────────────────────────────
 st.header("1. Project Overview")
 st.markdown("""
-The **Agarthan Skin Tone Analyzer (ASTA)** is a web application that determines a
-user's **seasonal colour type** — Spring, Summer, Autumn, or Winter — from a portrait
-photograph. Given a season classification, the app returns a personalised:
+The **Agarthan Skin Tone Analyzer (ASTA)** is a Streamlit application that classifies a
+portrait image into one of the four seasonal colour categories:
 
-- Colour palette (6 hex values)
-- Outfit colour recommendations and colours to avoid
-- Makeup tips (foundation, blush, lips, eyes)
+- **Autumn**
+- **Spring**
+- **Summer**
+- **Winter**
 
-The application accepts input via file upload, live camera capture, and a curated
-sample gallery. The entire classification and recommendation pipeline is handled by a
-single **Vision Language Model (VLM)** call — no separate rule-based system or
-custom-trained model is required.
-""")
+After classification, the app maps the predicted season to a stable recommendation
+template containing colour palettes, outfit colour suggestions, colours to avoid, and
+makeup guidance. The model is intentionally responsible only for the **classification
+step**. The recommendation text is template-based so the output remains consistent,
+debuggable, and easier to evaluate.
 
-st.divider()
+the project uses a **pre-trained model with task-specific
+fine-tuning**. The selected base model is **Moondream2**, and the model is adapted to
+the seasonal colour classification task using **LoRA fine-tuning**.
 
-# ── 2. Background: From RNNs to Transformers ─────────────────────────────────────
-st.header("2. Background: From RNNs to Transformers")
-st.markdown("""
-To understand why modern LLMs are built the way they are, it helps to understand what
-came before them.
-""")
-
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown("""
-    #### Recurrent Neural Networks (RNNs)
-    Early sequence models processed text **one token at a time**, passing a hidden state
-    forward at each step. While elegant, this design had two critical weaknesses:
-
-    - **Vanishing gradients** — information from early tokens was diluted or lost as the
-      sequence length grew, making it hard to learn long-range dependencies
-    - **Sequential bottleneck** — each step depended on the previous one, so computation
-      could not be parallelised; training on long sequences was slow
-
-    LSTMs and GRUs improved the memory problem but did not solve the parallelisation issue.
-    """)
-with col2:
-    st.markdown("""
-    #### The Attention Breakthrough
-    In the landmark 2017 paper *"Attention Is All You Need"* (Vaswani et al., Google),
-    the authors asked: *what if instead of passing information step by step, we let every
-    token attend directly to every other token in the sequence simultaneously?*
-
-    This idea — **self-attention** — became the foundation of the Transformer architecture
-    and, subsequently, all modern LLMs.
-
-    Key properties of the Transformer that addressed RNN limitations:
-    - **Parallelisable** — all tokens are processed simultaneously; training is dramatically
-      faster on GPUs/TPUs
-    - **Long-range dependencies** — any two tokens can interact directly, regardless of
-      their distance in the sequence
-    """)
-
-st.divider()
-
-# ── 3. The Transformer Architecture ─────────────────────────────────────────────
-st.header("3. The Transformer Architecture")
-st.markdown("""
-The Transformer is the architectural backbone of every modern LLM including Gemini.
-It is composed of stacked **Transformer blocks**, each containing two main components:
-a **Multi-Head Self-Attention** layer and a **Feed-Forward Network**. Both are wrapped
-with residual connections and layer normalisation.
-""")
-
-col_img, col_spacer = st.columns([1, 1])
-with col_img:
-    st.image(
-        "https://upload.wikimedia.org/wikipedia/commons/8/8f/The-Transformer-model-architecture.png",
-        caption="Figure 1 — The Transformer encoder–decoder architecture (Vaswani et al., 2017, 'Attention Is All You Need'). "
-                "Modern decoder-only LLMs like Gemini use only the right half (decoder stack) with a causal mask.",
-        use_container_width=True,
-    )
-
-st.subheader("3.1 Tokenisation")
-st.markdown("""
-Before any processing, raw text is converted into discrete integer tokens using a
-**tokeniser**. Modern LLMs use **Byte Pair Encoding (BPE)** or similar subword
-algorithms:
-
-1. Start with a large text corpus
-2. Iteratively merge the most frequent adjacent byte pairs into a single new token
-3. Repeat until the desired vocabulary size is reached (typically 32k–100k tokens)
-
-For example, the word `"skateboarding"` might be tokenised as
-`["skate", "boarding"]` — two known subwords — rather than character by character.
-This balances vocabulary size with the ability to represent rare or novel words.
-
-Each token is then mapped to a dense vector of fixed dimension *d* called an
-**embedding** — the model's learned numerical representation of that token.
-""")
-
-st.subheader("3.2 Self-Attention: Queries, Keys, and Values")
-st.markdown("""
-Self-attention is the mechanism that lets every token look at every other token and
-decide how much to attend to each one. For an input sequence of *n* tokens, each
-represented as an embedding vector, the attention layer computes three new matrices
-from learned linear projections:
-
-| Matrix | Symbol | Role |
-|---|---|---|
-| **Query** | **Q** | "What am I looking for?" |
-| **Key** | **K** | "What do I contain / advertise?" |
-| **Value** | **V** | "What information do I carry?" |
-
-The attention score between token *i* and token *j* is computed as the dot product of
-token *i*'s query with token *j*'s key, scaled by √*d_k* to prevent very large values:
-""")
-
-col_attn_code, col_attn_img = st.columns([1, 1])
-with col_attn_code:
-    st.code("""
-# Scaled Dot-Product Attention (conceptual)
-import numpy as np
-
-def scaled_dot_product_attention(Q, K, V):
-    d_k = Q.shape[-1]
-    scores = Q @ K.transpose(-2, -1) / np.sqrt(d_k)  # (n, n) attention matrix
-    weights = softmax(scores, dim=-1)                  # normalise to sum to 1
-    return weights @ V                                 # weighted sum of values
-""", language="python")
-with col_attn_img:
-    st.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Transformer%2C_attention_block_diagram.png/500px-Transformer%2C_attention_block_diagram.png",
-        caption="Scaled Dot-Product Attention block diagram",
-        use_container_width=True,
-    )
-
-st.markdown("""
-The output for each token is a **weighted sum of all value vectors**, where the weights
-reflect how relevant each other token is. A token will attend strongly to tokens whose
-keys match its query — effectively routing information through the sequence based on
-semantic relevance rather than positional proximity.
-
-**Masking:** In decoder-only models (like GPT, and the generation component of Gemini),
-a **causal mask** prevents each token from attending to future tokens. This preserves
-the autoregressive property needed for text generation.
-""")
-
-st.subheader("3.3 Multi-Head Attention")
-
-col_mha_text, col_mha_img = st.columns([1, 1])
-with col_mha_text:
-    st.markdown("""
-Rather than computing a single attention function, the Transformer computes **h parallel
-attention heads**, each with its own Q, K, V projection matrices:
-
-- Each head can learn to focus on a **different type of relationship** — one head might
-  track syntactic agreement, another coreference, another semantic similarity
-- The outputs of all heads are concatenated and linearly projected back to dimension *d*
-
-This is analogous to using multiple convolutional filters in a CNN — each filter
-detects a different feature.
-""")
-with col_mha_img:
-    st.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Multiheaded_attention%2C_block_diagram.png/500px-Multiheaded_attention%2C_block_diagram.png",
-        caption="Multi-Head Attention: h independent attention heads run in parallel, outputs concatenated then projected",
-        use_container_width=True,
-    )
-
-st.subheader("3.4 Positional Encoding")
-st.markdown("""
-Self-attention is **permutation-invariant** — it treats the input as a set, not a
-sequence. To give the model information about token order, a **positional encoding**
-is added to each token embedding before the first layer.
-
-Modern LLMs (including Gemini) use **Rotary Position Embeddings (RoPE)**, which encode
-absolute and relative position information directly into the Q and K matrices. This
-allows the model to generalise to longer sequences than it was trained on.
-""")
-
-st.subheader("3.5 Feed-Forward Network & Residual Connections")
-st.markdown("""
-After the attention layer, each token's representation passes through a position-wise
-**Feed-Forward Network (FFN)** — two linear layers with a non-linearity (typically
-GeLU) in between. This is where the model stores most of its "factual knowledge"
-according to mechanistic interpretability research.
-
-**Residual connections** (skip connections) add the input of each sub-layer to its
-output. Combined with **layer normalisation**, this prevents gradient degradation
-during training and allows very deep stacks of Transformer blocks.
-""")
-
-st.code("""
-# A single Transformer block (simplified)
-class TransformerBlock(nn.Module):
-    def forward(self, x):
-        # Multi-Head Self-Attention with residual
-        x = x + self.attention(self.norm1(x))
-        # Feed-Forward Network with residual
-        x = x + self.ffn(self.norm2(x))
-        return x
-""", language="python")
-
-st.divider()
-
-# ── 4. LLM Training Pipeline ─────────────────────────────────────────────────────
-st.header("4. LLM Training Pipeline")
-st.markdown("""
-Training a production LLM like Gemini involves three distinct phases, each building
-on the previous.
-""")
-
-col_a, col_b, col_c = st.columns(3)
-with col_a:
-    st.markdown("""
-    #### Phase 1: Pre-training
-    The model is trained on a **massive corpus** of text (web pages, books, code,
-    scientific papers) using **next-token prediction** as the objective:
-
-    > *Given tokens 1…n, predict token n+1.*
-
-    This simple objective, applied at web scale, forces the model to develop deep
-    representations of language, world knowledge, reasoning, and common sense.
-
-    Pre-training is the most compute-intensive phase. Gemini was trained on trillions
-    of tokens across text and multimodal data using Google's TPU infrastructure.
-    """)
-with col_b:
-    st.markdown("""
-    #### Phase 2: Supervised Fine-Tuning (SFT)
-    The pre-trained model is a next-token predictor, not an assistant. SFT adapts it
-    to follow instructions by fine-tuning on a curated dataset of
-    **prompt → ideal response** pairs, written or curated by human annotators.
-
-    This teaches the model the format and style of being helpful, while the
-    pre-trained knowledge base remains largely intact.
-
-    *"SFT is like teaching a very knowledgeable person how to communicate clearly."*
-    """)
-with col_c:
-    st.markdown("""
-    #### Phase 3: RLHF
-    **Reinforcement Learning from Human Feedback** further aligns the model with
-    human preferences:
-
-    1. Human raters rank model responses (A is better than B)
-    2. A **reward model** is trained to predict human preference scores
-    3. The LLM is fine-tuned via **PPO** (Proximal Policy Optimisation) to maximise
-       the reward model's score
-
-    RLHF is responsible for much of the "helpfulness" and safety behaviour in modern
-    LLMs. Google also uses **RLAIF** (RL from AI Feedback) to scale this process.
-    """)
-
-st.divider()
-
-# ── 5. Scaling Laws & Emergent Capabilities ──────────────────────────────────────
-st.header("5. Scaling Laws & Emergent Capabilities")
-st.markdown("""
-One of the most striking findings in LLM research is that model performance follows
-predictable **scaling laws** (Kaplan et al., 2020; Hoffmann et al., 2022 "Chinchilla"):
-
-- Performance improves as a **power law** with increases in model parameters, training
-  data, and compute
-- Optimal training requires scaling *both* model size *and* data proportionally
-
-More surprising are **emergent capabilities** — abilities that appear suddenly and
-unpredictably at scale thresholds, without being explicitly trained:
-
-| Emergent Capability | Description |
+| Requirement | ASTA implementation |
 |---|---|
-| **Chain-of-thought reasoning** | Breaking complex problems into step-by-step reasoning |
-| **In-context learning** | Learning a new task from examples in the prompt (few-shot) |
-| **Code generation** | Writing, explaining, and debugging code |
-| **Multimodal understanding** | Reasoning about images, audio, and video |
-| **Colour & aesthetic reasoning** | Understanding perceptual concepts like undertone and seasonal colour theory |
-
-The last capability — perceptual colour reasoning — is precisely what this project
-exploits. Gemini's scale gives it genuine colour theory knowledge that no hand-crafted
-rule system could replicate.
+| Mini-project model category | LLMs / Vision-Language Models |
+| Model strategy | Pre-trained VLM + LoRA fine-tuning |
+| Main task | Face seasonal colour classification |
+| Output classes | Autumn, Spring, Summer, Winter |
+| Application | Streamlit web app for seasonal colour analysis |
+| Final recommendations | Deterministic templates based on predicted season |
 """)
 
-st.divider()
-
-# ── 6. Vision Language Models (VLMs) ─────────────────────────────────────────────
-st.header("6. Vision Language Models (VLMs)")
-st.markdown("""
-A Vision Language Model extends the Transformer architecture to accept images as input
-alongside text. This is the category that Gemini 2.5 Flash belongs to.
-""")
-
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown("""
-    #### Image Encoding: Vision Transformers (ViT)
-    Images cannot be fed directly into a language model — they must first be converted
-    into a sequence of token-like vectors.
-
-    A **Vision Transformer (ViT)** divides the input image into a grid of fixed-size
-    **patches** (e.g. 16×16 pixels each). Each patch is:
-
-    1. Flattened into a 1D vector
-    2. Projected into the same embedding dimension *d* as text tokens
-    3. Combined with a positional embedding indicating the patch's location in the grid
-
-    The resulting sequence of **patch embeddings** is functionally identical to a
-    sequence of text token embeddings — the language model backbone sees no difference.
-    """)
-with col2:
-    st.markdown("""
-    #### Multimodal Fusion
-    Once image patches are encoded as embeddings, they are **concatenated** with the
-    text token embeddings and passed jointly into the Transformer backbone.
-
-    The self-attention mechanism then allows every text token to attend to every image
-    patch and vice versa — enabling the model to ground language in visual content.
-
-    In this project, the input sequence to Gemini is:
-    ```
-    [patch_1] [patch_2] ... [patch_N] [PROMPT tokens]
-    ```
-
-    The model processes both modalities simultaneously, so when it outputs
-    `"season": "Autumn"`, it has genuinely attended to the face's skin patches,
-    hair patches, and the colour-theory instructions in the prompt together.
-    """)
-
-st.image(
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/9/93/Vision_Transformer.png/900px-Vision_Transformer.png",
-    caption="Vision Transformer (ViT): the image is split into fixed-size patches, each patch is linearly embedded, "
-            "positional embeddings are added, and the resulting sequence is fed into a standard Transformer encoder "
-            "(Dosovitskiy et al., 2020 — 'An Image is Worth 16×16 Words').",
-    use_container_width=True,
+st.code(
+    """
+User portrait image
+    ↓
+OpenCV face detection and 512×512 crop
+    ↓
+Moondream2 VLM + LoRA adapter
+    ↓
+Structured prediction: {"season": "Winter"}
+    ↓
+Template-based palette and recommendation rendering
+    ↓
+Streamlit result page
+""".strip(),
+    language="text",
 )
 
+st.divider()
+
+
+# ── 3. Dataset ──────────────────────────────────────────────────────────────────
+st.header("2. Dataset Used")
 st.markdown("""
-#### Why VLMs Outperform Separate Vision + Language Pipelines
+The project uses the **Deep Armocromia** dataset, a face seasonal colour analysis
+dataset introduced in the ECCV 2024 Workshops proceedings. The original dataset is
+associated with seasonal colour analysis and classification, making it directly aligned
+with ASTA's task.
 
-Older multimodal systems used a **two-tower** architecture: a frozen vision model
-produces a feature vector, which is concatenated with text features and fed to a
-language model. The key weakness is that vision and language were trained separately
-and the cross-modal interaction was shallow.
-
-Modern VLMs like Gemini are trained **end-to-end** on multimodal data from the start.
-The Transformer's self-attention operates across the entire joint token sequence,
-enabling deep, bidirectional cross-modal reasoning rather than one-directional feature
-injection.
+For this implementation, the dataset was simplified into **four main seasonal classes**
+instead of subtype-level labels. This was done because early 12-class experiments were
+too unstable for reliable subtype classification, while the 4-class version better fits
+the practical scope of the Streamlit prototype and the mini-project timeline.
 """)
+
+st.markdown("""
+**Dataset citation used in the report:**
+
+```bibtex
+@InProceedings{10.1007/978-3-031-91569-7_22,
+  author="Stacchio, Lorenzo
+  and Paolanti, Marina
+  and Spigarelli, Francesca
+  and Frontoni, Emanuele",
+  editor="Del Bue, Alessio
+  and Canton, Cristian
+  and Pont-Tuset, Jordi
+  and Tommasi, Tatiana",
+  title="Deep Armocromia: A Novel Dataset for Face Seasonal Color Analysis and Classification",
+  booktitle="Computer Vision -- ECCV 2024 Workshops",
+  year="2025",
+  publisher="Springer Nature Switzerland",
+  address="Cham",
+  pages="352--367",
+  isbn="978-3-031-91569-7"
+}
+```
+
+Repository: `https://github.com/lorenzo-stacchio/Deep-Armocromia`
+""")
+
+
+st.subheader("2.1 JSONL Training Format")
+st.markdown("""
+The dataset generator converts the image folders into JSONL samples. Each sample pairs
+a cropped face image with a direct question-answer target. The output intentionally
+contains only the season label.
+""")
+
+st.code(
+    '''{
+  "image_path": "data/training_crops/train/winter/train_winter_001.jpg",
+  "qa": [
+    {
+      "question": "Classify this face into exactly one of these 4 seasonal color classes: Autumn, Spring, Summer, Winter. Return ONLY this JSON format: {\"season\":\"Winter\"}",
+      "answer": "{\"season\":\"Winter\"}"
+    }
+  ]
+}''',
+    language="json",
+)
 
 st.divider()
 
-# ── 7. Model Used ────────────────────────────────────────────────────────────────
-st.header("7. Model Used: Google Gemini 2.5 Flash")
+
+# ── 3. Why a VLM is an LLM ───────────────────────────────────────────────────────
+st.header("3. Why This Counts as an LLM Project")
+st.markdown("""
+A **Vision-Language Model** is a multimodal extension of a language model. Instead of
+receiving only text tokens, a VLM also receives image representations. The model then
+uses a language-model backbone to produce text output.
+
+In ASTA, the input image is encoded visually, then paired with a text prompt asking the
+model to classify the face into a season. The output is generated as text in a strict
+JSON format. Because the final prediction is produced through language-model generation,
+the system fits the **LLM/VLM track** of the assignment.
+""")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown("""
+    #### Vision side
+    - Face image is loaded with PIL/OpenCV
+    - Largest face is detected
+    - Face is padded and resized to 512×512
+    - Moondream2 encodes the image into visual embeddings
+    """)
+with col2:
+    st.markdown("""
+    #### Language side
+    - A structured classification prompt is provided
+    - The model generates a textual JSON answer
+    - Parser extracts the `season` field
+    - App maps the label to fixed recommendation templates
+    """)
+
+st.divider()
+
+
+# ── 4. Model Used ────────────────────────────────────────────────────────────────
+st.header("4. Model Used: Moondream2 + LoRA")
+st.markdown("""
+The project uses **Moondream2** as the base Vision-Language Model. Moondream2 is a
+small VLM suitable for local experimentation because it can accept an image and answer
+questions about the image through text generation.
+
+Instead of training all model weights, ASTA uses **LoRA (Low-Rank Adaptation)**.
+LoRA adds lightweight trainable adapter matrices to selected parts of the model. During
+fine-tuning, the original model remains mostly frozen while the adapter learns the task.
+This makes training more feasible in a student project environment.
+""")
 
 st.markdown("""
-| Property | Detail |
+| Component | Role |
 |---|---|
-| **Model ID** | `gemini-2.5-flash` |
-| **Developer** | Google DeepMind |
-| **Release** | 2025 |
-| **Type** | Multimodal LLM (VLM) — decoder-only Transformer |
-| **Modalities** | Text, Images, Audio, Video |
-| **Access** | Google AI API (`google-genai` Python SDK) |
-| **Usage in this project** | Pre-trained, zero-shot prompt engineering |
+| `vikhyatk/moondream2` | Pre-trained VLM base model |
+| LoRA adapter | Task-specific fine-tuned parameters |
+| OpenCV Haar Cascade | Face detection and cropping |
+| JSON prompt | Constrains the prediction format |
+| `analyzer.py` templates | Converts season prediction into stable user-facing recommendations |
+""")
 
-Gemini 2.5 Flash is part of Google's Gemini series — a family of natively multimodal
-models trained jointly on text, images, audio, and video from the ground up (unlike
-earlier models that added vision as an afterthought). Key architectural characteristics:
+st.subheader("4.1 Training Objective")
+st.markdown("""
+The training objective is narrow and supervised: given a cropped face image, the model
+must output exactly one valid season label.
+""")
 
-- **Decoder-only Transformer** with causal masked self-attention for text generation
-- **Mixture of Experts (MoE)** — the model activates only a subset of parameters per
-  token, making inference efficient while maintaining high total capacity
-- **Long context window** — supports up to 1 million tokens, enabling it to reason
-  over entire documents, codebases, or long conversations in a single pass
-- **Native multimodality** — image/audio/video encoders are co-trained with the
-  language backbone, not bolted on after the fact
-- **Thinking mode** — Gemini 2.5 models include an optional internal reasoning
-  ("thinking") phase before producing the final response, improving performance on
-  complex tasks
+st.code(
+    '''PROMPT = """
+Classify this face into exactly one of these 4 seasonal color classes:
 
-The **Flash** variant is optimised for speed and cost efficiency while retaining the
-multimodal capabilities of the full Gemini 2.5 Pro. For a task like seasonal colour
-analysis — which requires visual perception and language generation but not
-multi-step mathematical reasoning — Flash is the right choice.
+Autumn, Spring, Summer, Winter.
+
+Return ONLY this JSON format:
+{"season":"Winter"}
+
+No explanation. No markdown. No extra words.
+"""''',
+    language="python",
+)
+
+st.warning(
+    "The model does not generate the palette itself. It only predicts the season. "
+    "This avoids unstable or hallucinated recommendation text and makes evaluation clearer."
+)
+
+st.divider()
+
+
+# ── 5. System Pipeline ──────────────────────────────────────────────────────────
+st.header("5. System Pipeline")
+st.code(
+    """
+┌─────────────────────────────────────────────────────────────┐
+│ User Input                                                  │
+│ File upload / camera capture / sample image                 │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ PIL image
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ face_utils.py                                               │
+│ OpenCV Haar Cascade → largest face → 25% padding → 512 crop │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ cropped face image
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ analyzer.py                                                 │
+│ Load Moondream2 → attach LoRA to text_model → run prompt    │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ raw model text
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Parser                                                      │
+│ json.loads → embedded JSON fallback → season-word fallback  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ season label
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Template Renderer                                           │
+│ Palette · outfit colours · avoid colours · makeup tips      │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ final result
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Streamlit UI                                                │
+│ Displays the analysis result to the user                    │
+└─────────────────────────────────────────────────────────────┘
+""".strip(),
+    language="text",
+)
+
+st.divider()
+
+
+# ── 6. Preprocessing ─────────────────────────────────────────────────────────────
+st.header("6. Image Preprocessing")
+st.markdown("""
+Before inference, the system performs lightweight preprocessing. The goal is not to
+manually classify the skin tone using handcrafted colour thresholds. The goal is only
+to standardise the input so the VLM receives a centered face image.
+
+The preprocessing stage performs:
+
+1. RGB conversion
+2. Grayscale conversion for OpenCV face detection
+3. Frontal-face detection, with profile-face fallback
+4. Largest-face selection
+5. 25% padding around the detected face
+6. Resize to 512×512
+7. JPEG/Base64 conversion when needed by the app pipeline
+""")
+
+st.info(
+    "This design keeps computer vision preprocessing minimal. The learned VLM handles "
+    "the classification, while OpenCV only prepares a consistent face crop."
+)
+
+st.divider()
+
+
+# ── 7. Evaluation Results ────────────────────────────────────────────────────────
+st.header("7. Evaluation Results")
+st.markdown("""
+The fine-tuned model was evaluated on the test split using strict exact-match season
+classification. A prediction is considered correct only when the parsed season matches
+the expected label.
+""")
+
+show_metric_cards(STATIC_METRICS)
+
+st.subheader("7.1 Per-Class Classification Report")
+if pd is not None:
+    st.dataframe(pd.DataFrame(CLASSIFICATION_REPORT), use_container_width=True, hide_index=True)
+else:
+    st.table(CLASSIFICATION_REPORT)
+
+st.subheader("7.2 Confusion Matrix")
+st.markdown("Rows represent the **actual** class. Columns represent the **predicted** class.")
+
+loaded_confusion = load_optional_dataframe(CONFUSION_CSV)
+if loaded_confusion is not None:
+    if "Unnamed: 0" in loaded_confusion.columns:
+        loaded_confusion = loaded_confusion.rename(columns={"Unnamed: 0": "Actual"})
+    st.dataframe(loaded_confusion, use_container_width=True, hide_index=True)
+elif pd is not None:
+    st.dataframe(pd.DataFrame(CONFUSION_MATRIX), use_container_width=True, hide_index=True)
+else:
+    st.table(CONFUSION_MATRIX)
+
+st.subheader("7.3 Interpretation")
+st.markdown("""
+The evaluation shows that the pipeline is functional but still limited:
+
+- **Parse validity is strong**: the model consistently returns a parseable season label.
+- **Winter performs best** among the four classes, with the highest F1-score.
+- **Summer has high recall but lower precision**, meaning the model often predicts Summer.
+- **Spring is the weakest class**, suggesting overlap between Spring and nearby warm/bright
+  or soft categories.
+- The result is above random chance for a 4-class task, but it is not yet reliable enough
+  to be treated as a professional colour-analysis system.
 """)
 
 st.divider()
 
-# ── 8. Why a VLM for This Task? ──────────────────────────────────────────────────
-st.header("8. Why a VLM for This Task?")
+# ── 10. Comparison with Classical CV ─────────────────────────────────────────────
+st.header("8. Why Use a VLM Instead of a Classical Vision Pipeline?")
 
 col_a, col_b = st.columns(2)
 with col_a:
-    st.markdown("#### Traditional Computer Vision Pipeline")
     st.markdown("""
-    A classical approach would require multiple separate stages:
+    #### Classical CV approach
+    A traditional solution would likely require:
 
-    1. Face detection & landmark extraction
-    2. Skin pixel segmentation
-    3. Colour space conversion (RGB → Lab / HSV)
-    4. Dominant colour clustering (k-means)
-    5. Rules-based season classifier
-    6. Hardcoded recommendation lookup table
+    1. Face detection
+    2. Skin segmentation
+    3. Hair/eye region extraction
+    4. RGB to Lab/HSV conversion
+    5. Dominant colour clustering
+    6. Rule-based season mapping
+    7. Manual palette lookup
 
-    Each stage introduces its own failure modes, requires labelled training data or
-    hand-crafted rules, and **cannot reason about perceptual concepts** like undertone
-    or colour harmony — which resist simple numeric thresholds.
+    This approach is explainable, but brittle. Lighting, camera quality, makeup,
+    shadows, and background colour casts can easily distort measured RGB values.
     """)
+
 with col_b:
-    st.markdown("#### VLM Approach (This Project)")
     st.markdown("""
-    A VLM collapses the entire pipeline into a single model call:
+    #### VLM approach
+    ASTA uses the VLM to learn the mapping from face crop to season label.
 
-    1. Face detection & crop *(OpenCV — lightweight pre-processing only)*
-    2. **Single Gemini API call** — 512×512 face image + structured prompt
+    Advantages:
 
-    Gemini simultaneously perceives the face pixels, applies its trained understanding
-    of colour theory, and produces structured JSON recommendations — all in one forward
-    pass through a single Transformer.
+    - Handles image and text in one model
+    - Learns from labelled examples instead of handcrafted thresholds
+    - Produces structured textual output
+    - Can be fine-tuned using prompt-answer pairs
+    - Easier to integrate with a Streamlit app workflow
 
-    **Key advantages:**
-    - No labelled training data required
-    - Colour theory knowledge is already encoded during pre-training
-    - Recommendations are natural language, not lookup tables
-    - Generalises across diverse skin tones without explicit rules
-    - Easily extended to new output fields by updating the prompt only
+    The trade-off is that the model is less directly interpretable than a purely
+    rule-based colour pipeline.
     """)
 
 st.divider()
 
-# ── 9. Pre-trained vs Fine-tuned ─────────────────────────────────────────────────
-st.header("9. Pre-trained vs Fine-tuned")
+
+# ── 11. Limitations ──────────────────────────────────────────────────────────────
+st.header("10. Limitations")
 st.markdown("""
-The professor's brief states that models *"may be pre-trained and/or fine-tuned."*
-This project uses Gemini 2.5 Flash as a **pre-trained model with zero-shot prompting**.
+ASTA should be treated as a prototype and academic demonstration, not as a professional
+or certified colour-analysis tool.
 
-| Approach | Description | Used Here? |
-|---|---|---|
-| **Pre-training** | Train on massive unlabelled corpus (next-token prediction) | ✅ Done by Google |
-| **Supervised Fine-Tuning (SFT)** | Train on curated instruction-response pairs | ✅ Done by Google |
-| **RLHF** | Align outputs with human preferences via reward model | ✅ Done by Google |
-| **Task-specific fine-tuning** | Further fine-tune on seasonal colour analysis data | ❌ Not needed |
+Current limitations include:
 
-Fine-tuning on seasonal colour analysis data was **not necessary** because Gemini's
-pre-training and RLHF already encode comprehensive knowledge of colour theory, skin
-undertones, and seasonal analysis. A carefully engineered prompt is sufficient to
-elicit expert-quality output. Task-specific fine-tuning would only add value if we
-needed highly consistent brand-specific palettes or a proprietary classification scheme
-not present in the model's training data.
+- **Lighting sensitivity**: warm indoor lighting, coloured walls, and shadows can alter
+  apparent undertone.
+- **Face detection dependency**: if OpenCV fails to detect the face correctly, the crop
+  may be poor.
+- **Class overlap**: seasonal classes are subjective and visually overlapping.
+- **Dataset constraints**: performance depends on the quality, distribution, and label
+  consistency of the Deep Armocromia images used.
+- **No confidence calibration**: the current app returns a single season rather than a
+  probability distribution.
+- **Template generalisation**: recommendations are generalized per season, not customized
+  to every individual feature.
 """)
 
 st.divider()
 
-# ── 10. Prompt Engineering ───────────────────────────────────────────────────────
-st.header("10. Prompt Engineering")
+
+# ── 12. Future Work ──────────────────────────────────────────────────────────────
+st.header("11. Future Work")
 st.markdown("""
-The core of the project's LLM usage is a structured **master prompt** that instructs
-Gemini to act as a colour analyst and return a strict JSON object. This technique is
-called **output-constrained prompting** or **structured generation** — the model is
-told exactly what format to produce, making downstream parsing deterministic.
+Possible improvements include:
 
-This is an example of **zero-shot prompting**: the model is given only a role, task
-description, and output schema — no examples. This works because the capability
-(colour theory reasoning) is already present from pre-training.
-""")
-
-st.code('''PROMPT = """
-You are an expert colour analyst specialising in seasonal skin tone theory.
-Analyse the face in this image and determine the person's seasonal colour type.
-Focus on: skin undertone (warm/cool/neutral), skin depth (light/medium/deep),
-hair colour contrast, and overall colour harmony.
-
-Return ONLY a valid JSON object with this exact structure — no markdown, no code
-fences, no explanation text before or after:
-
-{
-  "season": "Spring" | "Summer" | "Autumn" | "Winter",
-  "undertone": "warm" | "cool" | "neutral",
-  "palette": ["#hex1", "#hex2", "#hex3", "#hex4", "#hex5", "#hex6"],
-  "outfit_colors": [{"name": "color name", "hex": "#hexcode"}, ...],
-  "avoid_colors":  [{"name": "color name", "hex": "#hexcode"}, ...],
-  "makeup_tips": {
-    "foundation": "...",
-    "blush": "...",
-    "lips": "...",
-    "eyes": "..."
-  },
-  "summary": "2-3 sentence explanation of why this season was chosen"
-}
-"""
-''', language="python")
-
-st.markdown("""
-**Design decisions in the prompt:**
-
-| Decision | Purpose |
-|---|---|
-| Role assignment ("You are an expert colour analyst") | Activates relevant pre-trained domain knowledge |
-| Explicit focus areas (undertone, depth, contrast) | Guides the model's visual attention to the right features |
-| JSON-only output instruction | Prevents prose that would break parsing |
-| Pipe-separated enum options (`"Spring" \| "Summer"`) | Constrains the model to valid values; reduces hallucination |
-| Hex codes in palette | Forces machine-readable colour values, not colour names |
-
-**Fallback parsing** in `analyzer.py` handles edge cases where the model wraps the
-JSON in markdown fences (`\`\`\`json`) or adds explanatory text, using `re.search`
-to extract the first `{...}` block as a last resort before raising a `ValueError`.
+1. **Improve dataset quality control** by filtering extreme lighting, heavy filters,
+   occlusions, and incorrect face crops.
+2. **Balance the dataset more carefully** so each season contributes equal training
+   signal.
+3. **Add confidence scoring** by evaluating multiple generations or adding classifier-style
+   logits if supported by the model pipeline.
+4. **Use a stronger VLM** if compute resources allow, while keeping the same 4-class task.
+5. **Revisit subtype classification** only after the 4-class model becomes stable.
+6. **Add explainability tools** such as crop previews, prediction logs, and confusion
+   matrix dashboards inside the Streamlit report page.
+7. **Collect local validation samples** from controlled lighting conditions to test how
+   the model performs on Filipino/Cebuano users and real deployment images.
 """)
 
 st.divider()
 
-# ── 11. System Pipeline ──────────────────────────────────────────────────────────
-st.header("11. System Pipeline")
-st.code("""
-┌─────────────────────────────────────────────────────────────────┐
-│                        User Input                               │
-│         (File Upload / Camera Capture / Sample Image)           │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ PIL Image
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    face_utils.py                                │
-│  OpenCV Haar Cascade → detect largest face → pad 25% →         │
-│  resize to 512×512 → Base64-encode to JPEG string              │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ base64 JPEG string
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     analyzer.py                                 │
-│  google-genai Client → types.Part.from_bytes(image, JPEG) →    │
-│  client.models.generate_content(gemini-2.5-flash, [img+prompt])│
-│                                                                 │
-│  Inside Gemini (Transformer forward pass):                      │
-│    Patch embeddings (image) + token embeddings (prompt)        │
-│    → Self-attention across all tokens                           │
-│    → Feed-forward layers                                        │
-│    → Autoregressive JSON generation                             │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ raw text response
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   JSON Parser (with fallback)                   │
-│  json.loads() → strip markdown fences → regex extraction       │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ parsed Python dict
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        app.py (UI)                              │
-│  Season banner · Colour swatches · Outfit chips · Makeup tips   │
-└─────────────────────────────────────────────────────────────────┘
-""", language="text")
 
-st.divider()
-
-# ── 12. Output Schema ────────────────────────────────────────────────────────────
-st.header("12. Model Output Schema")
+# ── 13. Conclusion ───────────────────────────────────────────────────────────────
+st.header("12. Conclusion")
 st.markdown("""
-The model returns a single JSON object parsed into a Python `dict`:
+ASTA demonstrates how a pre-trained **Vision-Language Model** can be adapted to a
+specialized computer-vision classification task through **LoRA fine-tuning**. The
+project uses the Deep Armocromia dataset, converts portrait images into cropped face
+samples, trains the model to output a strict JSON season label, and integrates the
+result into a Streamlit web application.
 
-| Field | Type | Description |
-|---|---|---|
-| `season` | `str` | One of: Spring, Summer, Autumn, Winter |
-| `undertone` | `str` | One of: warm, cool, neutral |
-| `palette` | `list[str]` | 6 hex colour codes (e.g. `#E8C4A0`) |
-| `outfit_colors` | `list[dict]` | `{name, hex}` — recommended clothing tones |
-| `avoid_colors` | `list[dict]` | `{name, hex}` — colours to avoid |
-| `makeup_tips` | `dict` | Keys: `foundation`, `blush`, `lips`, `eyes` |
-| `summary` | `str` | 2–3 sentence justification from the model |
+The revised 4-season setup is more appropriate than the earlier subtype-level design
+because it produces clearer evaluation results and a more stable app workflow. The
+current model reaches **51.54% season accuracy** with **100% parse validity** on the
+reported test set. This confirms that the end-to-end VLM fine-tuning and deployment
+pipeline works, although the classifier still requires stronger data quality and model
+improvements before it can be considered reliable.
+
+Overall, the project satisfies the **LLM/VLM mini-project category** by using a
+pre-trained multimodal language model, applying task-specific fine-tuning, and deploying
+it in a functional application.
 """)
 
 st.divider()
 
-# ── 13. Limitations & Future Work ────────────────────────────────────────────────
-st.header("13. Limitations & Future Work")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown("#### Current Limitations")
-    st.markdown("""
-    - **Free tier rate limit** — 20 requests/day; requires billing beyond that
-    - **Single face only** — pipeline crops the largest detected face; group photos
-      are not supported
-    - **No task-specific fine-tuning** — outputs reflect general colour theory, not
-      a certified analyst's methodology
-    - **Lighting sensitivity** — extreme over/underexposure affects colour perception
-    - **Hallucination risk** — like all LLMs, Gemini may occasionally produce
-      plausible-sounding but incorrect colour recommendations; there is no ground-truth
-      validation step in the current pipeline
-    - **Black-box reasoning** — we cannot inspect which image patches the model
-      attended to; explainability is limited
-    """)
-with col2:
-    st.markdown("#### Potential Improvements")
-    st.markdown("""
-    - **Task-specific fine-tuning** — collect labelled portraits with ground-truth
-      season labels from certified colour analysts; fine-tune a smaller VLM
-    - **Confidence / uncertainty** — prompt the model to return a probability
-      distribution over the four seasons to surface uncertainty
-    - **Multi-face support** — allow the user to select which face to analyse
-    - **Attention visualisation** — use Grad-CAM or attention rollout to highlight
-      which facial regions drove the season classification
-    - **Expanded modalities** — analyse hair colour separately to improve contrast
-      reasoning; accept video input for dynamic lighting conditions
-    - **Offline / local model** — integrate a small local VLM as fallback when the
-      API quota is exhausted
-    """)
-
-st.divider()
-
-# ── 14. Conclusion ───────────────────────────────────────────────────────────────
-st.header("14. Conclusion")
+# ── 14. References ───────────────────────────────────────────────────────────────
+st.header("13. References")
 st.markdown("""
-This project demonstrates a practical application of a **pre-trained Large Language
-Model** — specifically Google Gemini 2.5 Flash, a natively multimodal VLM — to the
-domain of personal colour analysis.
-
-At its core, Gemini is a **decoder-only Transformer** whose self-attention mechanism
-allows every image patch and text token to interact directly. Pre-trained at scale on
-trillions of multimodal tokens using next-token prediction, then aligned via SFT and
-RLHF, the model develops emergent capabilities — including colour theory and seasonal
-skin tone analysis — that no hand-crafted rule system could replicate.
-
-Rather than building a classical computer vision pipeline (segmentation → clustering →
-rule-based classification), the entire reasoning task is delegated to the VLM via a
-zero-shot structured prompt. The model's extensive pre-training makes task-specific
-fine-tuning unnecessary for this use case.
-
-The result is a functional, end-to-end web application built with Streamlit that
-accepts a portrait photo, performs lightweight face detection with OpenCV, and returns
-a complete personalised colour profile — all powered by a single Transformer forward
-pass through the Gemini API.
-
-This project satisfies the **LLMs** track of the mini-project brief by using a
-pre-trained LLM (VLM) as its core intelligent component, with prompt engineering as
-the primary technique for steering model behaviour toward a structured, actionable
-output.
+1. Stacchio, L., Paolanti, M., Spigarelli, F., & Frontoni, E. (2025). *Deep Armocromia:
+   A Novel Dataset for Face Seasonal Color Analysis and Classification*. In
+   **Computer Vision — ECCV 2024 Workshops**, Springer Nature Switzerland, pp. 352–367.
+2. Deep Armocromia GitHub repository: `https://github.com/lorenzo-stacchio/Deep-Armocromia`
+3. Vaswani, A. et al. (2017). *Attention Is All You Need*. NeurIPS.
+4. Hu, E. J. et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models*.
+5. Moondream2 model family by Vikhyat K. / Hugging Face: `vikhyatk/moondream2`.
+6. Streamlit documentation for Python web app deployment.
+7. OpenCV documentation for Haar Cascade face detection.
 """)
 
 st.divider()
-
-# ── 15. References ───────────────────────────────────────────────────────────────
-st.header("15. References")
-st.markdown("""
-1. Vaswani, A. et al. (2017). *Attention Is All You Need*. NeurIPS. arXiv:1706.03762
-2. MIT 6.S191 (2025). *Introduction to Deep Learning — Large Language Models (Google)*.
-   [YouTube](https://www.youtube.com/watch?v=ZNodOsz94cc&list=PLtBw6njQRU-rwp5__7C0oIVt26ZgjG9NI&index=13) · [introtodeeplearning.com](https://introtodeeplearning.com/)
-3. Google DeepMind (2024). *Gemini: A Family of Highly Capable Multimodal Models*. arXiv:2312.11805
-4. Kaplan, J. et al. (2020). *Scaling Laws for Neural Language Models*. arXiv:2001.08361
-5. Hoffmann, J. et al. (2022). *Training Compute-Optimal Large Language Models (Chinchilla)*. arXiv:2203.15556
-6. Ouyang, L. et al. (2022). *Training language models to follow instructions with human feedback (InstructGPT / RLHF)*. NeurIPS. arXiv:2203.02155
-7. Dosovitskiy, A. et al. (2020). *An Image is Worth 16×16 Words: Transformers for Image Recognition at Scale (ViT)*. arXiv:2010.11929
-""")
-
-st.divider()
-st.caption("Agarthan Skin Tone Analyzer · Mini-Project Report · 2026")
+st.caption("Agarthan Skin Tone Analyzer · CS346 Mini-Project Report · 2026")
